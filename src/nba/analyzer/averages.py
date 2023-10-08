@@ -1,17 +1,21 @@
+import math
 import sys
 from argparse import ArgumentParser, Namespace
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from caritas.core.depot.abc.api import SQLBasedExternalDepot
 
+from nba.analyzer.averages import StatsLoader
 from nba.collector.depot import init_db
 
 _avg_table_name = 'running_player_averages_'
 _insert_query: str = 'INSERT INTO NBA.running_player_averages_{time} AS avgs ({headers}) ' \
                      'VALUES (' \
                      '%(game_date)s' \
+                     ', %(season)s' \
+                     ', %(week_id)s' \
                      ', %(player)s' \
                      ', %(minutes_played)s' \
                      ', %(field_goals)s' \
@@ -34,7 +38,7 @@ _insert_query: str = 'INSERT INTO NBA.running_player_averages_{time} AS avgs ({h
                      ', %(guard_player_stats)s' \
                      ', %(forward_player_stats)s' \
                      ')' \
-                     'ON CONFLICT (game_date, player)' \
+                     'ON CONFLICT (game_date, player, season)' \
                      'DO UPDATE SET' \
                      '  minutes_played = %(minutes_played)s' \
                      ', field_goals = %(field_goals)s' \
@@ -56,22 +60,68 @@ _insert_query: str = 'INSERT INTO NBA.running_player_averages_{time} AS avgs ({h
                      ', center_player_stats = %(center_player_stats)s' \
                      ', guard_player_stats = %(guard_player_stats)s' \
                      ', forward_player_stats = %(forward_player_stats)s' \
-                     'WHERE avgs.game_date = %(game_date)s AND avgs.player = %(player)s '
+                     'WHERE avgs.game_date = %(game_date)s AND avgs.player = %(player)s ' \
+                     'AND season = %{season}s'
 
 
 class AveragePeriods(Enum):
     ONE_WEEK = 1 * 7
-    # THREE_WEEK = 3 * 7
-    # NINE_WEEK = 9 * 7
+    THREE_WEEK = 3 * 7
+    NINE_WEEK = 9 * 7
 
 
 class DynamicAveragesCalculator:
     """
     Will create the dynamic averages entries for the collected game data.
     """
-
+    log10: float = math.log(10)
     # Based on formula from https://www.investopedia.com/articles/forex/09/mcginley-dynamic-indicator.asp
     constant_weight: int = 6
+
+    @staticmethod
+    def normalize(value: float) -> float:
+        return math.asinh(value / 2) / DynamicAveragesCalculator.log10
+
+    @staticmethod
+    def calculate_moving_average(cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]],
+                                 rows: List[Dict[str, any]], loader: StatsLoader, period: AveragePeriods,
+                                 week: int) -> None:
+        player_totals = cache.get(period)
+        for row in rows:
+            player: str = row.get('player')
+            stat: Dict[str, any] = {'player': player, 'game_date': row.get('game_date'), 'season': row.get('season'),
+                                    'week_id': week}
+
+            t: time = row.get('minutes_played')
+            stat['minutes_played'] = DynamicAveragesCalculator.normalize(
+                (t.hour * 3600 + t.minute * 60 + t.second) * 1.0)
+            stat['field_goals'] = DynamicAveragesCalculator.normalize(
+                row.get('field_goals') / row.get('field_goal_attempts'))
+            stat['three_points'] = DynamicAveragesCalculator.normalize(
+                row.get('three_points') / row.get('three_point_attempts'))
+            stat['free_throws'] = DynamicAveragesCalculator.normalize(
+                row.get('free_throws') / row.get('free_throw_attempts'))
+            stat['total_rebounds'] = DynamicAveragesCalculator.normalize(
+                row.get('offensive_rebounds') + row.get('defensive_rebounds'))
+
+            stat['field_goal_attempts'] = DynamicAveragesCalculator.normalize(row.get('field_goal_attempts'))
+            stat['free_throw_attempts'] = DynamicAveragesCalculator.normalize(row.get('free_throw_attempts'))
+            stat['free_throws_made'] = DynamicAveragesCalculator.normalize(row.get('free_throws'))
+            stat['three_points_made'] = DynamicAveragesCalculator.normalize(row.get('three_points'))
+            stat['three_point_attempts'] = DynamicAveragesCalculator.normalize(row.get('three_point_attempts'))
+            stat['offensive_rebounds'] = DynamicAveragesCalculator.normalize(row.get('offensive_rebounds'))
+            stat['defensive_rebounds'] = DynamicAveragesCalculator.normalize(row.get('defensive_rebounds'))
+
+            stat['assists'] = DynamicAveragesCalculator.normalize(row.get('assists'))
+            stat['steels'] = DynamicAveragesCalculator.normalize(row.get('steels'))
+            stat['blocks'] = DynamicAveragesCalculator.normalize(row.get('blocks'))
+            stat['turn_overs'] = DynamicAveragesCalculator.normalize(row.get('turn_overs'))
+            stat['personal_fouls'] = DynamicAveragesCalculator.normalize(row.get('personal_fouls'))
+            stat['points_scored'] = DynamicAveragesCalculator.normalize(row.get('points_scored'))
+            stat['plus_minus'] = DynamicAveragesCalculator.normalize(row.get('plus_minus'))
+            stat['overall_efficiency'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_overall(stat))
+            running_totals: List[Dict[str, any]] = player_totals.get(player)
 
     @staticmethod
     def calculate_averages(previous_stats: Dict[str, Dict[str, any]], rows: List[Dict[str, any]],
@@ -80,6 +130,7 @@ class DynamicAveragesCalculator:
         averages: List[Dict[str, any]] = []
         for row in rows:
             player: str = row.get('player')
+
             stat: Dict[str, any] = previous_stats.get(player)
             if not stat:
                 stat = {'player': player}
@@ -123,10 +174,25 @@ class DynamicAveragesCalculator:
         val = val + 0.7 * row.get('assists')
         val = val + 0.7 * row.get('blocks')
         val = val - 0.7 * row.get('field_goal_attempts')
-        val = val - 0.4 * (row.get('free_throw_attempts') - row.get('free_throws'))
-        val = val - 0.4 * (row.get('three_point_attempts') - row.get('three_points'))
+        val = val - 0.4 * (row.get('free_throw_attempts') - row.get('free_throws_made'))
+        val = val - 0.4 * (row.get('three_point_attempts') - row.get('three_points_made'))
         val = val - 0.4 * row.get('personal_fouls')
+        val = val + .7 * row.get('minutes_played')
         return val - row.get('turn_overs')
+
+    @staticmethod
+    def calc_center_stats(row: Dict[str, any]) -> float:
+        return .8 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
+            .6 * row.get('field_goals') + row.get('minutes_played')
+
+    @staticmethod
+    def calc_guard_stats(row: Dict[str, any]) -> float:
+        return .8 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') + \
+            row.get('minutes_played') - row.get('turn_overs')
+
+    @staticmethod
+    def calc_forward_stats(row: Dict[str, any]) -> float:
+        pass
 
 
 class StatsLoader:
@@ -140,33 +206,28 @@ class StatsLoader:
                     'AND table_name = \'{avg_tbl_name}\''
     _numeric_cols_names: str = 'SELECT column_name FROM information_schema.columns WHERE table_schema = \'nba\' ' \
                                'AND table_name = \'{avg_tbl_name}\' AND data_type = \'double precision\';'
-    _averages_player: str = 'SELECT player, minutes_played, field_goals, three_points, free_throws, offensive_rebounds'\
+    _averages_player: str = 'SELECT player, minutes_played, field_goals, three_points, free_throws, offensive_rebounds' \
                             ', defensive_rebounds, total_rebounds, assists, steels, blocks, turn_overs, points_scored' \
-                            ', overall_efficiency, period_length FROM NBA.{avg_tbl_name} a ' \
-                            'WHERE a.period_length={period} AND a.game_date=(SELECT MAX(game_date) ' \
-                            'FROM NBA.{avg_tbl_name} WHERE period_length={second_period})'
-    _gams_played: str = 'SELECT player, season, COUNT(season) ' \
-                        'FROM nba.game_stats ' \
-                        'WHERE game_date BETWEEN \'{from}\' AND \'{to}\' AND season=\'{season}\' ' \
-                        'GROUP BY player, season ORDER BY season DESC, player;'
+                            ', overall_efficiency FROM NBA.{avg_tbl_name} a ' \
+                            'WHERE a.season={season} AND a.week_id={week_id}'
+    _games_played: str = 'SELECT player, season, COUNT(season) AS games_played' \
+                         'FROM nba.game_stats ' \
+                         'WHERE game_date BETWEEN \'{from_date}\' AND \'{to_date}\' AND season=\'{season}\' ' \
+                         'AND player=\'{player}\' GROUP BY player, season ORDER BY season DESC, player;'
 
     def __init__(self):
         self.depot: SQLBasedExternalDepot = init_db()
 
-    def load_by_season(self, season: str) -> List[Dict[str, any]]:
-        print(f'Loading data by season {season}.')
-        result: List[Dict[str, any]] = self.depot.do_query_many_dict(StatsLoader._season_query.format(season=season))
-        if len(result) == 0:
-            raise ValueError(f'Season {season} does not exist.')
-
-        dates: Dict[str, date] = result[0]
-        from_date: date = dates.get('season_start')
-        to_date: date = dates.get('season_end')
-        return self.load_by_dates(from_date, to_date)
+    def load_by_season(self, season_dates: Tuple[date, date]) -> List[Dict[str, any]]:
+        return self.load_by_dates(season_dates[0], season_dates[1])
 
     def load_by_dates(self, from_date: date, to_date: date) -> List[Dict[str, any]]:
         print(f'Loading data by dates from {from_date} to {to_date}.')
         return self.depot.do_query_many_dict(StatsLoader._game_date_query.format(from_date=from_date, to_date=to_date))
+
+    def load_games_played(self, player: str, season: str, from_date: date, to_date: date) -> Dict[str, any]:
+        return self.depot.do_batch_query_single_dict(
+            StatsLoader._games_played.format(from_date=from_date, to_date=to_date, season=season, player=player), False)
 
     def get_averages_headers(self) -> str:
         rows: List[Dict[str, any]] = self.depot.do_query_many_dict(StatsLoader._headers)
@@ -205,18 +266,32 @@ class AnalyticsController:
     """
     Guides the steps to load and calculate all analytics.
     """
+    _seasons_query: str = 'SELECT * FROM NBA.seasons;'
 
     def __init__(self):
-        self.loader: StatsLoader = StatsLoader()
         self.depot: SQLBasedExternalDepot = init_db()
+        self.loader: StatsLoader = StatsLoader()
+        self.season_dates: Dict[str, Tuple[date, date]] = self.load_seasons()
 
     def calc_for_season(self, season: str) -> None:
-        self.analyze_and_store(self.loader.load_by_season(season))
+        if season not in self.season_dates:
+            raise ValueError(f'season {season} not found')
+        # self.analyze_and_store(self.loader.load_by_season(self.season_dates.get(season)))
+        dates: Tuple[date, date] = self.season_dates.get(season)
+        current_date: date = dates[0]
+        next_date: date = current_date + timedelta(days=1)
+        week_date: date = current_date + timedelta(days=AveragePeriods.ONE_WEEK.value)
+        three_date: date = current_date + timedelta(days=AveragePeriods.THREE_WEEK.value)
+        nine_date: date = current_date + timedelta(days=AveragePeriods.NINE_WEEK.value)
+        cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]] = {}
+        while current_date <= dates[1]:
+            self.calc_for_dates()
+            current_date = next_date
 
     def calc_for_dates(self, from_date: date, to_date: date) -> None:
         self.analyze_and_store(self.loader.load_by_dates(from_date, to_date))
 
-    def analyze_and_store(self, rows: List[Dict[str, any]]) -> None:
+    def analyze_and_store(self, rows: List[Dict[str, any]], start_week: int, number_of_weeks: int) -> None:
         columns: List[str] = self.loader.get_averages_column_names()
         headers: str = self.loader.get_averages_headers()
         for period in AveragePeriods:
@@ -224,6 +299,13 @@ class AnalyticsController:
             result: List[Dict[str, any]] = DynamicAveragesCalculator.calculate_averages(stats, rows, columns, period)
             self.depot.do_batch_query_single_dict(_insert_query.format(time=period.name, headers=headers), False,
                                                   result)
+
+    def load_seasons(self):
+        seasons: Dict[str, Tuple[date, date]] = {}
+        result: List[Dict[str, any]] = self.depot.do_query_many_dict(self._seasons_query)
+        for item in result:
+            seasons[item['season']] = (item['season_start'], item['season_end'])
+        return seasons
 
 
 def main(args):
