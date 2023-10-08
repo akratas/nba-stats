@@ -1,13 +1,14 @@
 import math
 import sys
 from argparse import ArgumentParser, Namespace
+from builtins import isinstance
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Dict, List, Tuple
 
 from caritas.core.depot.abc.api import SQLBasedExternalDepot
+from soupsieve.util import lower
 
-from nba.analyzer.averages import StatsLoader
 from nba.collector.depot import init_db
 
 _avg_table_name = 'running_player_averages_'
@@ -31,12 +32,13 @@ _insert_query: str = 'INSERT INTO NBA.running_player_averages_{time} AS avgs ({h
                      ', %(points_scored)s' \
                      ', %(plus_minus)s' \
                      ', %(overall_efficiency)s' \
-                     ', %(season)s' \
                      ', %(games_played)s' \
+                     ', %(game_rating_score)s' \
                      ', %(minutes_per_game)s' \
                      ', %(center_player_stats)s' \
                      ', %(guard_player_stats)s' \
                      ', %(forward_player_stats)s' \
+                     ', %(created_timestamp)s' \
                      ')' \
                      'ON CONFLICT (game_date, player, season)' \
                      'DO UPDATE SET' \
@@ -54,20 +56,21 @@ _insert_query: str = 'INSERT INTO NBA.running_player_averages_{time} AS avgs ({h
                      ', points_scored = %(points_scored)s' \
                      ', overall_efficiency = %(overall_efficiency)s' \
                      ', plus_minus = %(plus_minus)s' \
-                     ', season = %(season)s' \
                      ', games_played = %(games_played)s' \
+                     ', game_rating_score = %(game_rating_score)s' \
                      ', minutes_per_game = %(minutes_per_game)s' \
                      ', center_player_stats = %(center_player_stats)s' \
                      ', guard_player_stats = %(guard_player_stats)s' \
                      ', forward_player_stats = %(forward_player_stats)s' \
+                     ', created_timestamp = %(created_timestamp)s ' \
                      'WHERE avgs.game_date = %(game_date)s AND avgs.player = %(player)s ' \
-                     'AND season = %{season}s'
+                     'AND avgs.season = %(season)s'
 
 
 class AveragePeriods(Enum):
-    ONE_WEEK = 1 * 7
-    THREE_WEEK = 3 * 7
-    NINE_WEEK = 9 * 7
+    ONE_WEEK = 1
+    THREE_WEEK = 3
+    NINE_WEEK = 9
 
 
 class DynamicAveragesCalculator:
@@ -84,23 +87,25 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calculate_moving_average(cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]],
-                                 rows: List[Dict[str, any]], loader: StatsLoader, period: AveragePeriods,
-                                 week: int) -> None:
-        player_totals = cache.get(period)
+                                 rows: List[Dict[str, any]], depot: SQLBasedExternalDepot,
+                                 games_played: Dict[AveragePeriods, Dict[str, int]],
+                                 saved_dates: Dict[AveragePeriods, date], headers: str, week: int) -> None:
+        saved_date_one: date = None
+        saved_date_three: date = None
+        saved_date_nine: date = None
         for row in rows:
             player: str = row.get('player')
             stat: Dict[str, any] = {'player': player, 'game_date': row.get('game_date'), 'season': row.get('season'),
                                     'week_id': week}
 
             t: time = row.get('minutes_played')
-            stat['minutes_played'] = DynamicAveragesCalculator.normalize(
-                (t.hour * 3600 + t.minute * 60 + t.second) * 1.0)
+            stat['minutes_played'] = (t.hour * 60 + t.minute + t.second / 60)
             stat['field_goals'] = DynamicAveragesCalculator.normalize(
-                row.get('field_goals') / row.get('field_goal_attempts'))
+                row.get('field_goals') / row.get('field_goal_attempts')) if row.get('field_goal_attempts') > 0 else 0
             stat['three_points'] = DynamicAveragesCalculator.normalize(
-                row.get('three_points') / row.get('three_point_attempts'))
+                row.get('three_points') / row.get('three_point_attempts')) if row.get('three_point_attempts') > 0 else 0
             stat['free_throws'] = DynamicAveragesCalculator.normalize(
-                row.get('free_throws') / row.get('free_throw_attempts'))
+                row.get('free_throws') / row.get('free_throw_attempts')) if row.get('free_throw_attempts') > 0 else 0
             stat['total_rebounds'] = DynamicAveragesCalculator.normalize(
                 row.get('offensive_rebounds') + row.get('defensive_rebounds'))
 
@@ -121,7 +126,108 @@ class DynamicAveragesCalculator:
             stat['plus_minus'] = DynamicAveragesCalculator.normalize(row.get('plus_minus'))
             stat['overall_efficiency'] = DynamicAveragesCalculator.normalize(
                 DynamicAveragesCalculator.calc_overall(stat))
-            running_totals: List[Dict[str, any]] = player_totals.get(player)
+            stat['game_rating_score'] = DynamicAveragesCalculator.normalize(row.get('game_rating_score'))
+            stat['center_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_center_stats(stat))
+            stat['guard_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_guard_stats(stat))
+            stat['forward_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_forward_stats(stat))
+
+            stat['games_played'] = DynamicAveragesCalculator.check_games_played(games_played, AveragePeriods.ONE_WEEK,
+                                                                                player)
+            if (DynamicAveragesCalculator.check_player_totals(cache, stat, depot, saved_dates, headers,
+                                                              AveragePeriods.ONE_WEEK)):
+                saved_date_one = stat.get('game_date')
+
+            stat['games_played'] = DynamicAveragesCalculator.check_games_played(games_played, AveragePeriods.THREE_WEEK,
+                                                                                player)
+            # if (DynamicAveragesCalculator.check_player_totals(cache, stat, depot, saved_dates, headers,
+            #                                                   AveragePeriods.THREE_WEEK)):
+            #     saved_date_three = stat.get('game_date')
+
+            stat['games_played'] = DynamicAveragesCalculator.check_games_played(games_played, AveragePeriods.NINE_WEEK,
+                                                                                player)
+            # if (DynamicAveragesCalculator.check_player_totals(cache, stat, depot, saved_dates, headers,
+            #                                                   AveragePeriods.NINE_WEEK)):
+            #     saved_date_nine = stat.get('game_date')
+
+        if saved_date_one is not None:
+            saved_dates[AveragePeriods.ONE_WEEK] = saved_date_one
+            DynamicAveragesCalculator.reset_games_played(games_played, AveragePeriods.ONE_WEEK)
+        if saved_date_three is not None:
+            saved_dates[AveragePeriods.THREE_WEEK] = saved_date_three
+            DynamicAveragesCalculator.reset_games_played(games_played, AveragePeriods.THREE_WEEK)
+        if saved_date_nine is not None:
+            saved_dates[AveragePeriods.NINE_WEEK] = saved_date_nine
+            DynamicAveragesCalculator.reset_games_played(games_played, AveragePeriods.NINE_WEEK)
+
+    @staticmethod
+    def reset_games_played(games_played: Dict[AveragePeriods, Dict[str, int]], period: AveragePeriods):
+        gp: Dict[str, int] = games_played.get(period)
+        for key in gp.keys():
+            gp[key] = 0
+
+    @staticmethod
+    def check_games_played(games_played: Dict[AveragePeriods, Dict[str, int]], period: AveragePeriods,
+                           player: str) -> int:
+        gp: Dict[str, int] = games_played.get(period)
+        if player not in gp:
+            gp[player] = 0
+        gp[player] = gp[player] + 1
+        return gp[player]
+
+    @staticmethod
+    def check_player_totals(cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]], stat: Dict[str, any],
+                            depot: SQLBasedExternalDepot, saved_dates: Dict[AveragePeriods, date],
+                            headers: str, period: AveragePeriods) -> bool:
+        all_player_totals: Dict[str, List[Dict[str, any]]] = cache.get(period)
+        player: str = stat.get('player')
+        player_totals: List[Dict[str, any]] = all_player_totals.get(player)
+        if player_totals is None:
+            player_totals = []
+            all_player_totals[player] = player_totals
+        period_date: date = saved_dates.get(period)
+        game_date = stat.get('game_date')
+        week_id: int = int((game_date - period_date).days / 7)
+        saved: bool = False
+        if week_id > 0 and int(week_id % period.value) is 0:
+            # time to calculate average and store in table
+            params: List[Dict[str, any]] = []
+            avg: Dict[str, any] = {}
+            max_games: int = 0
+            for total in player_totals:
+                for key in total.keys():
+                    value = total[key]
+                    if 'games_played' is key:
+                        max_games = max(total.get(key), max_games)
+                        continue
+                    elif 'week_id' is key:
+                        avg[key] = value
+                    elif isinstance(value, float) or isinstance(value, int):
+                        avg[key] = avg[key] + value if key in avg else value
+                    else:
+                        avg[key] = value
+                for key in avg.keys():
+                    value = avg[key]
+                    if 'week_id' is key:
+                        continue
+                    if isinstance(value, float) or isinstance(value, int):
+                        avg[key] = value / max_games
+            if len(avg) > 0:
+                avg['minutes_per_game'] = avg['minutes_played'] / max_games if 'minutes_played' in avg else 0
+                avg['games_played'] = max_games
+                avg['created_timestamp'] = datetime.now()
+                params.append(avg)
+                depot.do_batch_query_single_dict(_insert_query.format(time=lower(period.name), headers=headers), False,
+                                                 params)
+                saved = True
+                if len(player_totals) > 0:
+                    player_totals.pop(0)
+                all_player_totals[player] = player_totals
+        player_totals.append(stat)
+        all_player_totals[player] = player_totals
+        return saved
 
     @staticmethod
     def calculate_averages(previous_stats: Dict[str, Dict[str, any]], rows: List[Dict[str, any]],
@@ -183,16 +289,17 @@ class DynamicAveragesCalculator:
     @staticmethod
     def calc_center_stats(row: Dict[str, any]) -> float:
         return .8 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
-            .6 * row.get('field_goals') + row.get('minutes_played')
+            .6 * row.get('field_goals')
 
     @staticmethod
     def calc_guard_stats(row: Dict[str, any]) -> float:
-        return .8 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') + \
-            row.get('minutes_played') - row.get('turn_overs')
+        return .8 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') - \
+            row.get('turn_overs')
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
-        pass
+        return row.get('field_goals') * row.get('points_scored') + .4 * row.get('three_point_attempts') - \
+            row.get('three_points_made')
 
 
 class StatsLoader:
@@ -230,7 +337,8 @@ class StatsLoader:
             StatsLoader._games_played.format(from_date=from_date, to_date=to_date, season=season, player=player), False)
 
     def get_averages_headers(self) -> str:
-        rows: List[Dict[str, any]] = self.depot.do_query_many_dict(StatsLoader._headers)
+        rows: List[Dict[str, any]] = self.depot.do_query_many_dict(StatsLoader._headers.format(
+            avg_tbl_name=f'{_avg_table_name}{lower(AveragePeriods.ONE_WEEK.name)}'))
         size: int = len(rows) - 1
         pointer: int = 0
         headers: str = ''
@@ -283,13 +391,27 @@ class AnalyticsController:
         week_date: date = current_date + timedelta(days=AveragePeriods.ONE_WEEK.value)
         three_date: date = current_date + timedelta(days=AveragePeriods.THREE_WEEK.value)
         nine_date: date = current_date + timedelta(days=AveragePeriods.NINE_WEEK.value)
-        cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]] = {}
+        cache: Dict[AveragePeriods, Dict[str, List[Dict[str, any]]]] = {AveragePeriods.ONE_WEEK: {},
+                                                                        AveragePeriods.THREE_WEEK: {},
+                                                                        AveragePeriods.NINE_WEEK: {}}
+        headers: str = self.loader.get_averages_headers()
+        games_played: Dict[AveragePeriods, Dict[str, int]] = {AveragePeriods.ONE_WEEK: {},
+                                                              AveragePeriods.THREE_WEEK: {},
+                                                              AveragePeriods.NINE_WEEK: {}}
+        saved_dates: Dict[AveragePeriods, date] = {AveragePeriods.ONE_WEEK: current_date,
+                                                   AveragePeriods.THREE_WEEK: current_date,
+                                                   AveragePeriods.NINE_WEEK: current_date}
         while current_date <= dates[1]:
-            self.calc_for_dates()
-            current_date = next_date
+            game_data: List[Dict[str, any]] = self.loader.load_by_dates(current_date, next_date)
+            week: int = int(max((current_date - dates[0]).days / 7, (next_date - dates[0]).days / 7)) + 1
+            DynamicAveragesCalculator.calculate_moving_average(cache, game_data, self.depot, games_played, saved_dates,
+                                                               headers, week)
+            current_date = next_date + timedelta(days=1)
+            next_date: date = current_date + timedelta(days=1)
 
     def calc_for_dates(self, from_date: date, to_date: date) -> None:
-        self.analyze_and_store(self.loader.load_by_dates(from_date, to_date))
+        # self.analyze_and_store(self.loader.load_by_dates(from_date, to_date))
+        pass
 
     def analyze_and_store(self, rows: List[Dict[str, any]], start_week: int, number_of_weeks: int) -> None:
         columns: List[str] = self.loader.get_averages_column_names()

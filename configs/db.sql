@@ -64,26 +64,27 @@ BEGIN
 			, season VARCHAR(20) NOT NULL
 			, week_id INT NOT NULL
 			, player VARCHAR(50) NOT NULL
-			, minutes_played FLOAT NOT NULL
-			, field_goals FLOAT NOT NULL
-			, three_points FLOAT NOT NULL
-			, free_throws FLOAT NOT NULL
-			, offensive_rebounds FLOAT NOT NULL
-			, defensive_rebounds FLOAT NOT NULL
-			, total_rebounds FLOAT NOT NULL
-			, assists FLOAT NOT NULL
-			, steels FLOAT NOT NULL
-			, blocks FLOAT NOT NULL
-			, turn_overs FLOAT NOT NULL
-			, points_scored FLOAT NOT NULL
-			, plus_minus FLOAT NOT NULL
-			, overall_efficiency FLOAT NOT NULL
-			, season VARCHAR(20)
+			, minutes_played NUMERIC(6,4) NOT NULL
+			, field_goals NUMERIC(6,4) NOT NULL
+			, three_points NUMERIC(6,4) NOT NULL
+			, free_throws NUMERIC(6,4) NOT NULL
+			, offensive_rebounds NUMERIC(6,4) NOT NULL
+			, defensive_rebounds NUMERIC(6,4) NOT NULL
+			, total_rebounds NUMERIC(6,4) NOT NULL
+			, assists NUMERIC(6,4) NOT NULL
+			, steels NUMERIC(6,4) NOT NULL
+			, blocks NUMERIC(6,4) NOT NULL
+			, turn_overs NUMERIC(6,4) NOT NULL
+			, points_scored NUMERIC(6,4) NOT NULL
+			, plus_minus NUMERIC(6,4) NOT NULL
+			, overall_efficiency NUMERIC(6,4) NOT NULL
 			, games_played INT NOT NULL
-			, minutes_per_game NUMERIC(4,2) NOT NULL
-			, center_player_stats NUMERIC(4,2) NOT NULL
-			, guard_player_stats NUMERIC(4,2) NOT NULL
-			, forward_player_stats NUMERIC(4,2) NOT NULL
+			, game_rating_score NUMERIC(6,4) NOT NULL
+			, minutes_per_game NUMERIC(6,4) NOT NULL
+			, center_player_stats NUMERIC(6,4) NOT NULL
+			, guard_player_stats NUMERIC(6,4) NOT NULL
+			, forward_player_stats NUMERIC(6,4) NOT NULL
+			, created_timestamp timestamp default current_timestamp
 			, UNIQUE(game_date, player, season)
 		);
 		CREATE INDEX IF NOT EXISTS averages_player_index_'||rec.name||' on NBA.running_player_averages_'||rec.name||'(player);
