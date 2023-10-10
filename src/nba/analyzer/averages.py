@@ -322,18 +322,18 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calc_center_stats(row: Dict[str, any]) -> float:
-        return .8 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
-            .6 * row.get('field_goals') + .6 * row.get('games_played')
+        return 80 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
+            60 * row.get('field_goals') + .6 * row.get('games_played')
 
     @staticmethod
     def calc_guard_stats(row: Dict[str, any]) -> float:
-        return .8 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') - \
+        return 85 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') - \
             row.get('turn_overs') + .6 * row.get('games_played')
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
-        return row.get('field_goals') * row.get('points_scored') + .4 * row.get('three_point_attempts') - \
-            row.get('three_points') + .6 * row.get('games_played')
+        return row.get('field_goals') * row.get('points_scored') + 40 * row.get('three_point_attempts') - \
+            row.get('three_points') + 60 * row.get('games_played')
 
 
 class StatsLoader:
