@@ -123,19 +123,13 @@ class DynamicAveragesCalculator:
 
             t: time = row.get('minutes_played')
             stat['minutes_played'] = (t.hour * 60 + t.minute + t.second / 60)
-            stat['field_goals'] = DynamicAveragesCalculator.normalize(
-                row.get('field_goals') / row.get('field_goal_attempts')) if row.get('field_goal_attempts') > 0 else 0
-            stat['three_points'] = DynamicAveragesCalculator.normalize(
-                row.get('three_points') / row.get('three_point_attempts')) if row.get('three_point_attempts') > 0 else 0
-            stat['free_throws'] = DynamicAveragesCalculator.normalize(
-                row.get('free_throws') / row.get('free_throw_attempts')) if row.get('free_throw_attempts') > 0 else 0
             stat['total_rebounds'] = DynamicAveragesCalculator.normalize(
                 row.get('offensive_rebounds') + row.get('defensive_rebounds'))
-
+            stat['field_goals'] = DynamicAveragesCalculator.normalize(row.get('field_goals'))
             stat['field_goal_attempts'] = DynamicAveragesCalculator.normalize(row.get('field_goal_attempts'))
             stat['free_throw_attempts'] = DynamicAveragesCalculator.normalize(row.get('free_throw_attempts'))
-            stat['free_throws_made'] = DynamicAveragesCalculator.normalize(row.get('free_throws'))
-            stat['three_points_made'] = DynamicAveragesCalculator.normalize(row.get('three_points'))
+            stat['free_throws'] = DynamicAveragesCalculator.normalize(row.get('free_throws'))
+            stat['three_points'] = DynamicAveragesCalculator.normalize(row.get('three_points'))
             stat['three_point_attempts'] = DynamicAveragesCalculator.normalize(row.get('three_point_attempts'))
             stat['offensive_rebounds'] = DynamicAveragesCalculator.normalize(row.get('offensive_rebounds'))
             stat['defensive_rebounds'] = DynamicAveragesCalculator.normalize(row.get('defensive_rebounds'))
@@ -146,16 +140,8 @@ class DynamicAveragesCalculator:
             stat['turn_overs'] = DynamicAveragesCalculator.normalize(row.get('turn_overs'))
             stat['personal_fouls'] = DynamicAveragesCalculator.normalize(row.get('personal_fouls'))
             stat['points_scored'] = DynamicAveragesCalculator.normalize(row.get('points_scored'))
-            stat['plus_minus'] = DynamicAveragesCalculator.normalize(row.get('plus_minus'))
-            stat['overall_efficiency'] = DynamicAveragesCalculator.normalize(
-                DynamicAveragesCalculator.calc_overall(stat))
+            stat['plus_minus'] = DynamicAveragesCalculator.normalize( row.get('plus_minus'))
             stat['game_rating_score'] = DynamicAveragesCalculator.normalize(row.get('game_rating_score'))
-            stat['center_player_stats'] = DynamicAveragesCalculator.normalize(
-                DynamicAveragesCalculator.calc_center_stats(stat))
-            stat['guard_player_stats'] = DynamicAveragesCalculator.normalize(
-                DynamicAveragesCalculator.calc_guard_stats(stat))
-            stat['forward_player_stats'] = DynamicAveragesCalculator.normalize(
-                DynamicAveragesCalculator.calc_forward_stats(stat))
 
             stat['games_played'] = DynamicAveragesCalculator.check_games_played(games_played, AveragePeriods.ONE_WEEK,
                                                                                 player)
@@ -246,8 +232,15 @@ class DynamicAveragesCalculator:
                 if isinstance(value, float) or isinstance(value, int):
                     avg[key] = value / max_games
         if len(avg) > 0:
-            avg['minutes_per_game'] = avg['minutes_played'] / max_games if 'minutes_played' in avg else 0
             avg['games_played'] = max_games
+            avg['overall_efficiency'] = DynamicAveragesCalculator.normalize(DynamicAveragesCalculator.calc_overall(avg))
+            avg['center_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_center_stats(avg))
+            avg['guard_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_guard_stats(avg))
+            avg['forward_player_stats'] = DynamicAveragesCalculator.normalize(
+                DynamicAveragesCalculator.calc_forward_stats(avg))
+            avg['minutes_per_game'] = avg['minutes_played'] / max_games if 'minutes_played' in avg else 0
             avg['created_timestamp'] = datetime.now()
             avg['game_date'] = game_date
             params.append(avg)
@@ -309,34 +302,38 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calc_overall(row: Dict[str, any]) -> float:
-        val: float = row.get('points_scored')
-        val = val + 0.4 * row.get('field_goals')
-        val = val + 0.4 * row.get('three_points')
-        val = val + 0.7 * row.get('offensive_rebounds')
-        val = val + 0.3 * row.get('defensive_rebounds') + row.get('steels')
-        val = val + 0.7 * row.get('assists')
-        val = val + 0.7 * row.get('blocks')
-        val = val - 0.7 * row.get('field_goal_attempts')
-        val = val - 0.4 * (row.get('free_throw_attempts') - row.get('free_throws_made'))
-        val = val - 0.4 * (row.get('three_point_attempts') - row.get('three_points_made'))
-        val = val - 0.4 * row.get('personal_fouls')
-        val = val + .7 * row.get('minutes_played')
-        return val - row.get('turn_overs')
+        minutes_per_game: int = row.get('minutes_per_game') if row.get('minutes_per_game') is not None else 1
+        val: float = row.get('points_scored') if row.get('points_scored') is not None else 0 \
+            + 85 * row.get('field_goal') if row.get('field_goal') is not None else 0 \
+            + 53 * row.get('steels') if row.get('steels') is not None else 0 \
+            + 51 * row.get('three_points') if row.get('three_points') is not None else 0 \
+            + 46 * row.get('free_throws') if row.get('free_throws') is not None else 0 \
+            + 39 * row.get('blocks') if row.get('blocks') is not None else 0 \
+            + 39 * row.get('offensive_rebounds') if row.get('offensive_rebounds') is not None else 0 \
+            + 34 * row.get('assists') if row.get('assists') is not None else 0 \
+            + 14 * row.get('defensive_rebounds') if row.get('defensive_rebounds') is not None else 0 \
+            + -17 * row.get('personal_fouls') if row.get('personal_fouls') is not None else 0 \
+            + -20 * (row.get('free_throw_attempts') - row.get('free_throws')) if row.get('free_throw_attempts') else 0 \
+            + -53 * row.get('turn_overs') if row.get('turn_overs') is not None else 0 \
+            + row.get('plus_minus') if row.get('plus_minus') is not None else 0 \
+            + row.get('game_rating_score') if row.get('game_rating_score') is not None else 0
+        return val * (1 / minutes_per_game)
+
 
     @staticmethod
     def calc_center_stats(row: Dict[str, any]) -> float:
         return .8 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
-            .6 * row.get('field_goals')
+            .6 * row.get('field_goals') + .6 * row.get('games_played')
 
     @staticmethod
     def calc_guard_stats(row: Dict[str, any]) -> float:
         return .8 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') - \
-            row.get('turn_overs')
+            row.get('turn_overs') + .6 * row.get('games_played')
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
         return row.get('field_goals') * row.get('points_scored') + .4 * row.get('three_point_attempts') - \
-            row.get('three_points_made')
+            row.get('three_points') + .6 * row.get('games_played')
 
 
 class StatsLoader:
