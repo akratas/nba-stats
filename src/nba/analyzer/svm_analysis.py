@@ -6,7 +6,7 @@ from typing import Dict, Tuple, List
 from caritas.core.depot.abc.api import SQLBasedExternalDepot
 from sklearn import svm
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler, Normalizer, QuantileTransformer, KernelCenterer, RobustScaler
+from sklearn.preprocessing import StandardScaler, QuantileTransformer, RobustScaler
 from sklearn.svm import LinearSVC
 
 from nba.analyzer.averages import AnalyticsController, AveragePeriods
@@ -64,7 +64,7 @@ class Classifier:
         clf: svm.LinearSVC = make_pipeline(QuantileTransformer(n_quantiles=len(x_y[0])),
                                            RobustScaler(quantile_range=(0.0001, 6.0), unit_variance=True),
                                            StandardScaler(),
-                                           LinearSVC(random_state=0, tol=0.0001, C=100, max_iter=100_000))
+                                           LinearSVC(random_state=0, tol=0.0001, C=1, max_iter=100_000))
 
         clf.fit(x_y[0], x_y[1])
         print(clf.score(x_y[0], x_y[1]))

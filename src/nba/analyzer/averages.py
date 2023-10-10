@@ -140,7 +140,7 @@ class DynamicAveragesCalculator:
             stat['turn_overs'] = DynamicAveragesCalculator.normalize(row.get('turn_overs'))
             stat['personal_fouls'] = DynamicAveragesCalculator.normalize(row.get('personal_fouls'))
             stat['points_scored'] = DynamicAveragesCalculator.normalize(row.get('points_scored'))
-            stat['plus_minus'] = DynamicAveragesCalculator.normalize( row.get('plus_minus'))
+            stat['plus_minus'] = DynamicAveragesCalculator.normalize(row.get('plus_minus'))
             stat['game_rating_score'] = DynamicAveragesCalculator.normalize(row.get('game_rating_score'))
 
             stat['games_played'] = DynamicAveragesCalculator.check_games_played(games_played, AveragePeriods.ONE_WEEK,
@@ -196,7 +196,7 @@ class DynamicAveragesCalculator:
         game_date: date = stat.get('game_date')
         week_id: int = int((game_date - period_date).days / 7)
         saved: bool = False
-        if week_id > 0 and int(week_id % period.value) is 0:
+        if week_id > 0 and int(week_id % period.value) == 0:
             # time to calculate average and store in table
             saved = DynamicAveragesCalculator.write_averages(depot, game_date, headers, period,
                                                              player_totals)
@@ -214,12 +214,12 @@ class DynamicAveragesCalculator:
         for total in player_totals:
             for key in total.keys():
                 value = total[key]
-                if 'games_played' is key:
+                if 'games_played' == key:
                     max_games = max(total.get(key), max_games)
                     continue
-                elif 'week_id' is key:
+                elif 'week_id' == key:
                     avg[key] = value
-                elif 'game_date' is key:
+                elif 'game_date' == key:
                     game_date = max(game_date, value)
                 elif isinstance(value, float) or isinstance(value, int):
                     avg[key] = avg[key] + value if key in avg else value
@@ -227,7 +227,7 @@ class DynamicAveragesCalculator:
                     avg[key] = value
             for key in avg.keys():
                 value = avg[key]
-                if 'week_id' is key:
+                if 'week_id' == key:
                     continue
                 if isinstance(value, float) or isinstance(value, int):
                     avg[key] = value / max_games
@@ -319,7 +319,6 @@ class DynamicAveragesCalculator:
             + row.get('game_rating_score') if row.get('game_rating_score') is not None else 0
         return val * (1 / minutes_per_game)
 
-
     @staticmethod
     def calc_center_stats(row: Dict[str, any]) -> float:
         return 80 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + 45 * row.get('blocks') + \
@@ -332,8 +331,14 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
-        return ((row.get('field_goals')/row.get('field_goal_attempts')) * row.get('points_scored') +
-                40 * row.get('three_point_attempts') - row.get('three_points') + 60 * row.get('games_played'))
+        field_goal_attempts = row.get('field_goal_attempts')
+        if field_goal_attempts is None or field_goal_attempts == 0:
+            return 0
+        if row.get('three_point_attempts') is None:
+            return ((row.get('field_goals') / field_goal_attempts) * row.get('points_scored') + 60 * row.get(
+                'games_played'))
+        return ((row.get('field_goals') / field_goal_attempts) * row.get('points_scored') +
+                40 * (row.get('three_point_attempts') - row.get('three_points')) + 60 * row.get('games_played'))
 
 
 class StatsLoader:

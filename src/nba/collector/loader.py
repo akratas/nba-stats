@@ -109,7 +109,7 @@ class NBAStatsParser(HTMLParser):
             return
         thead = [item for item in atts if 'thead' in item]
         if tag == 'tr' and self.is_collecting:
-            self.is_collecting_rows = len(thead) is 0
+            self.is_collecting_rows = len(thead) == 0
         if tag == 'td' and self.is_collecting_rows:
             self.cell_counter += 1
 
@@ -145,8 +145,6 @@ class NBAStatsParser(HTMLParser):
         if self.is_collecting_rows:
             value = data.strip()
             # Strip out columns we don't collect
-            if 'Kyrie Irving' is str(value):
-                print(value)
             if value is 'W' \
                     or value is 'L':
                 return
