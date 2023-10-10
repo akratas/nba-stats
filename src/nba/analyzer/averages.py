@@ -332,7 +332,7 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
-        return row.get('field_goals') * row.get('points_scored') + 40 * row.get('three_point_attempts') - \
+        return (row.get('field_goals')/row.get('field_goal_attempts')) * row.get('points_scored') + 40 * row.get('three_point_attempts') - \
             row.get('three_points') + 60 * row.get('games_played')
 
 
