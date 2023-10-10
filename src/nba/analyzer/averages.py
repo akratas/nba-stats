@@ -322,13 +322,13 @@ class DynamicAveragesCalculator:
 
     @staticmethod
     def calc_center_stats(row: Dict[str, any]) -> float:
-        return 80 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + row.get('blocks') + \
-            60 * row.get('field_goals') + .6 * row.get('games_played')
+        return 80 * (row.get('defensive_rebounds') + row.get('offensive_rebounds')) + 45 * row.get('blocks') + \
+            65 * row.get('field_goals') + 45 * row.get('games_played')
 
     @staticmethod
     def calc_guard_stats(row: Dict[str, any]) -> float:
         return 85 * (row.get('assists') + row.get('steels')) + row.get('three_points') * row.get('points_scored') - \
-            row.get('turn_overs') + .6 * row.get('games_played')
+            row.get('turn_overs') + 25 * row.get('games_played')
 
     @staticmethod
     def calc_forward_stats(row: Dict[str, any]) -> float:
